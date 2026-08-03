@@ -48,6 +48,19 @@ API — it is NOT set via `docker push`. The `neo-worker` package must be
 **public** so Unraid nodes can pull it anonymously (the Unraid template
 references `ghcr.io/slepner/neo-worker:latest`).
 
+**Visibility gotcha (learned 2026-08-03):** GHCR sets a container package's
+visibility when the package is FIRST created, based on the linked repository's
+visibility at that moment. If the repo is private at first push, the package
+stays private forever — even after the repo is made public and newer images
+are pushed. The "Set a package visibility" REST endpoint no longer exists
+(404 since ~2023, absent from current OpenAPI spec), and classic PATs without
+`delete:packages` cannot delete packages. Fix that works: a one-shot
+GitHub Actions workflow with `packages: write` can delete the package
+(GitHub enabled workflow-delete in public preview), then a fresh push
+recreates it with visibility inherited from the now-public repo. The
+`delete-package.yml` workflow in this repo is kept but DISABLED so it can be
+re-enabled if this ever needs to be done again.
+
 ## Deploy on Unraid
 
 The container is managed by the Unraid template `neo-worker.xml`
