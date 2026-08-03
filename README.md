@@ -1,34 +1,100 @@
 # neo-worker
 
-Redis-backed worker container for AI task execution with controlled Unraid share access.
+Redis-backed job worker for GARLCLOUD. Listens on a Redis queue, executes
+bash commands against mounted Unraid shares, and reports results back. It is
+the execution gateway that lets AI agents (Neo / n8n) run controlled file
+operations on the server.
 
 ## How it works
 
+- Connects to Redis (`redis-ai:6379` by default, over Docker DNS on `homeai-net`).
+- Blocks on `BRPOP` against queue `jobs:neo:pending` (default `QUEUE_NAME`).
+- Supports one task type: `run_bash` (shell command, 1 hour timeout).
+- Pushes a result object to the `jobs:neo:completed` list (LPUSH).
+- If `/workspace/neo_worker.py` exists as a bind-mount override, that copy is
+  executed instead of the baked-in `/app/neo_worker.py` — handy for
+  hot-patching without rebuilding the image.
+
+Job payload format (push to `jobs:neo:pending`):
+
+```json
+{"job_id": "neo-xxxxx", "task_type": "run_bash", "command": "echo hello"}
 ```
-Neo (Hermes) → Redis queue → neo-worker → executes job → Redis completed → Neo reads result
+
+Result payload (read from `jobs:neo:completed`):
+
+```json
+{"job_id": "neo-xxxxx", "exit_code": 0, "stdout": "hello\n", "stderr": ""}
 ```
 
-Jobs are pushed to `jobs:neo:pending` as JSON. The worker picks them up, executes the
-`run_bash` command against mounted Unraid shares, and pushes the result to `jobs:neo:completed`.
+## Files
 
-## Environment
+| File | Purpose |
+|---|---|
+| `neo_worker.py` | The worker itself (Python 3, redis-py). |
+| `Dockerfile` | Builds `ghcr.io/slepner/neo-worker:latest`. python:3.11-slim, runs as UID 99 / GID 100. |
+| `docker-compose.yml` | Compose definition matching the RUNNING container config on GARLCLOUD (all 14 mounts). |
 
-| Variable      | Default    | Description                    |
-|---------------|------------|--------------------------------|
-| REDIS_HOST    | redis-ai   | Redis server hostname          |
-| REDIS_PORT    | 6379       | Redis server port              |
-| QUEUE_NAME    | jobs:neo:pending | Redis list key for pending jobs |
-
-## Runtime Override
-
-If `/workspace/neo_worker.py` exists as a bind mount, it takes precedence over the
-built-in worker. This lets you update the worker logic without rebuilding the image.
-
-## Building
+## Build & publish
 
 ```bash
-docker build -t neo-worker .
+docker build -t ghcr.io/slepner/neo-worker:latest .
+docker login ghcr.io -u Slepner          # token with write:packages
+docker push ghcr.io/slepner/neo-worker:latest
 ```
 
-For Unraid, build and push to GHCR via the included GitHub Actions workflow,
-then deploy using the Unraid XML template.
+Package visibility on GHCR is controlled per-package in GitHub settings /
+API — it is NOT set via `docker push`. The `neo-worker` package must be
+**public** so Unraid nodes can pull it anonymously (the Unraid template
+references `ghcr.io/slepner/neo-worker:latest`).
+
+## Deploy on Unraid
+
+The container is managed by the Unraid template `neo-worker.xml`
+(template-user dir). It runs on the `homeai-net` Docker network alongside
+`redis-ai`, `n8n`, and the rest of the GARLCLOUD stack.
+
+Compose alternative (matches the running container's mounts):
+
+```bash
+cd /path/to/this/repo
+docker network create homeai-net   # if missing
+docker compose up -d
+```
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REDIS_HOST` | `redis-ai` | Redis host (Docker DNS name). |
+| `REDIS_PORT` | `6379` | Redis port. |
+| `QUEUE_NAME` | `jobs:neo:pending` | Queue to BRPOP from. |
+| `PYTHONUNBUFFERED` | `1` | Flush logs immediately (set in compose). |
+
+### Mounts (running config)
+
+| Host path | Container path | Mode |
+|---|---|---|
+| `/mnt/user/workspace` | `/workspace` | rw |
+| `/mnt/user/Dreamworld` | `/dreamworld` | rw |
+| `/mnt/user/lucas` | `/shares/lucas` | rw |
+| `/mnt/user/riley` | `/shares/riley` | rw |
+| `/boot/config/plugins/dockerMan/templates-user` | `/share/dockertemplates` | rw |
+| `/mnt/user/Media` | `/shares/Media` | rw, shared |
+| `/mnt/user/photos` | `/shares/photos` | rw, shared |
+| `/mnt/user/immich` | `/shares/immich` | ro |
+| `/mnt/user/alison` | `/shares/alison` | ro |
+| `/mnt/user/graham` | `/shares/graham` | ro |
+| `/mnt/user/Backups` | `/shares/Backups` | ro |
+| `/mnt/user/Homefiles` | `/shares/Homefiles` | ro |
+| `/mnt/disks` | `/shares/disks` | ro |
+| `/mnt/disks/USBDRIVEMEDIA` | `/shares/USBDRIVEMEDIA` | ro |
+
+## Operational notes
+
+- Redis connectivity uses Docker DNS (`redis-ai`), so the container must be on
+  `homeai-net`. A startup loop retries `ping()` every 5s until Redis is reachable.
+- Logs are plain-text stdout lines; container log driver is `json-file`
+  (max-size 50m, max-file 1).
+- The image is rebuilt from this repo whenever the worker changes; the running
+  container keeps the same name/tag so rollback is a `docker pull` + recreate.

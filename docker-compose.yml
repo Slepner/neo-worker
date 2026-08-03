@@ -1,0 +1,50 @@
+services:
+  neo-worker:
+    image: ghcr.io/slepner/neo-worker:latest
+    container_name: neo-worker
+    user: "99:100"
+    restart: unless-stopped
+    networks:
+      - homeai-net
+    environment:
+      - TZ=Australia/Perth
+      - REDIS_HOST=redis-ai
+      - REDIS_PORT=6379
+      - QUEUE_NAME=jobs:neo:pending
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Writable working/data-exchange area
+      - /mnt/user/workspace:/workspace:rw
+      # Dreamworld (Obsidian vault + documents), writable
+      - /mnt/user/Dreamworld:/dreamworld:rw
+      # Writable per-user shares
+      - /mnt/user/lucas:/shares/lucas:rw
+      - /mnt/user/riley:/shares/riley:rw
+      # Unraid template dir (read-write for template management)
+      - /boot/config/plugins/dockerMan/templates-user:/share/dockertemplates:rw
+      # Media + photos mounted rw with shared propagation (matches running config)
+      - type: bind
+        source: /mnt/user/Media
+        target: /shares/Media
+        read_only: false
+        bind:
+          propagation: shared
+      - type: bind
+        source: /mnt/user/photos
+        target: /shares/photos
+        read_only: false
+        bind:
+          propagation: shared
+      # Read-only share mounts
+      - /mnt/user/immich:/shares/immich:ro
+      - /mnt/user/alison:/shares/alison:ro
+      - /mnt/user/graham:/shares/graham:ro
+      - /mnt/user/Backups:/shares/Backups:ro
+      - /mnt/user/Homefiles:/shares/Homefiles:ro
+      - /mnt/disks:/shares/disks:ro
+      - /mnt/disks/USBDRIVEMEDIA:/shares/USBDRIVEMEDIA:ro
+    working_dir: /workspace
+
+networks:
+  homeai-net:
+    external: true
