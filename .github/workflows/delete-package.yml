@@ -1,0 +1,33 @@
+name: Delete GHCR Package
+# One-shot maintenance workflow: deletes the GHCR package so a fresh push
+# from the (now public) repo recreates it with public visibility.
+# GHCR sets package visibility at creation from the linked repo's visibility.
+# Delete requires delete:packages scope; workflow GITHUB_TOKEN gets it via
+# packages: write in the public-preview workflow delete path.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  delete-package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Delete package via REST API
+        run: |
+          curl -sS -X DELETE \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -w "\nHTTP %{http_code}\n" \
+            "https://api.github.com/user/packages/container/neo-worker" \
+            || true
+      - name: Verify package is gone
+        run: |
+          sleep 5
+          curl -sS -o /dev/null -w "package GET: %{http_code}\n" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/user/packages/container/neo-worker" \
+            || true
